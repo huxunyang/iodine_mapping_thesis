@@ -2,12 +2,30 @@
 import numpy as np
 
 def _split_nrrd(data: bytes):
-    sep = b'\\n\\n'
-    idx = data.find(sep)
+    """
+    支持 \n\n 和 \r\n\r\n 两种 header 分隔符
+    """
+    # 先找 Unix 风格
+    idx = data.find(b"\n\n")
+    sep_len = 2
+
+    # 再找 Windows 风格
     if idx < 0:
-        raise ValueError('NRRD header separator not found')
-    header = data[:idx].decode('ascii', errors='replace')
-    blob = data[idx + 2:]
+        idx = data.find(b"\r\n\r\n")
+        sep_len = 4
+
+    if idx < 0:
+        # 帮你输出一些提示信息：看看是不是根本不是 NRRD
+        head = data[:200]
+        raise ValueError(
+            "NRRD header separator not found. "
+            "This file may not be a single-file NRRD (could be .nhdr+.raw), "
+            "or line endings/encoding differ.\n"
+            f"First 200 bytes: {head!r}"
+        )
+
+    header = data[:idx].decode("ascii", errors="replace")
+    blob = data[idx + sep_len:]
     return header, blob
 
 def _parse_header(header: str):

@@ -1,11 +1,13 @@
 ﻿import pandas as pd
 
 import config as C
+import numpy as np
 from io_utils.nrrd_zip import read_nrrd_from_zip, list_members
 from decomposition.proj_domain import fit_mu_coeffs, decompose_WI
 from evaluation.metrics import rmse, rel_rmse, bone_leakage_metric
 from evaluation.tables import save_df
-
+from viz.plots import plot_metric_vs_deltaE
+from viz.plots import scatter_x_y
 def m(name: str) -> str:
     return C.SIM_BASE_DIR + name
 
@@ -51,12 +53,18 @@ def main():
         muW1, muI1 = mu[e1][0], mu[e1][1]
         muW2, muI2 = mu[e2][0], mu[e2][1]
         _, LI_est = decompose_WI(proj[e1], proj[e2], muW1, muI1, muW2, muI2)
+        A = np.array([[muW1, muI1],
+              [muW2, muI2]], dtype=float)
+        condA = float(np.linalg.cond(A))
+        detA  = float(np.linalg.det(A))  # 可选：也存一下行列式便于解释稳定性
 
         leak = bone_leakage_metric(LI_est, LB, thresh=C.BONE_RAY_THRESH)
 
         rows.append({
             'pair': f'{e1}/{e2}',
             'deltaE': abs(e2 - e1),
+            "cond_A": condA,     # <-- 新增
+            "det_A": detA,       # <-- 可选新增
             'iodine_RMSE_vs_GT': rmse(LI_est, LI_gt),
             'iodine_relRMSE_vs_GT': rel_rmse(LI_est, LI_gt),
             'bone_falseI_mean': leak['falseI_mean'],
@@ -68,6 +76,25 @@ def main():
     df = pd.DataFrame(rows).sort_values('deltaE')
     out_csv = C.OUT_DIR / 'sim_projection_domain_results.csv'
     save_df(df, out_csv)
+
+    plot_metric_vs_deltaE(
+    df, "iodine_relRMSE_vs_GT",
+    C.OUT_DIR / "sim_iodine_relRMSE_vs_deltaE.png",
+    title="Simulation: Iodine relRMSE vs ΔE"
+    )
+    plot_metric_vs_deltaE(
+    df, "bone_falseI_abs_mean",
+    C.OUT_DIR / "sim_bone_falseI_abs_mean_vs_deltaE.png",
+    title="Simulation: Bone false iodine vs ΔE"
+    )
+    scatter_x_y(
+    df, "cond_A", "iodine_relRMSE_vs_GT",
+    C.OUT_DIR / "sim_relRMSE_vs_condA.png",
+    title="Simulation: relRMSE vs cond(A)",
+    annotate_col="pair"
+    )
+    
+    print("Saved plots to outputs/")
 
     print('\\nSaved:', out_csv)
     print(df.to_string(index=False))
