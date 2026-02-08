@@ -2,4 +2,4 @@
 pandas
 matplotlib
 pydicom
-scikit-learn
+scipy

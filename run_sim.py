@@ -1,7 +1,7 @@
 ﻿import pandas as pd
 import numpy as np
 
-import config.sim as C
+import config as C
 from io_utils.nrrd_dir import read_nrrd_from_dir
 
 from decomposition.proj_domain import fit_mu_coeffs, decompose_WI
@@ -10,48 +10,68 @@ from evaluation.tables import save_df
 from viz.plots import plot_metric_vs_deltaE, scatter_x_y
 
 
-def _fname(pid: str, material: str) -> str:
-    # 适配你的文件命名：ProjMuVolume_{Phantom2}_Water.nrrd
-    return f"ProjMuVolume_{pid}_{material}.nrrd"
+def _energy_tag(e: int) -> str:
+    """
+    你的文件名能量标签是：
+      80  -> E080  (3位)
+      100 -> E0100 (4位)
+      120 -> E0120 (4位)
+    """
+    return f"{e:03d}" if e < 100 else f"{e:04d}"
+
+
+def _fname_noise(kind: str, energy: int) -> str:
+    # kind: "ProjNoise" / "ReconNoise" 等（这里我们只用 ProjNoise）
+    return f"{kind}_{C.SIM_FILE_PID}_E{_energy_tag(energy)}.nrrd"
+
+
+def _fname_mu(kind: str, material: str) -> str:
+    """
+    材料投影真值文件名是：
+      ProjMuVolume_Phantom2_Water.nrrd
+      ProjMuVolume_Phantom2_Iodine.nrrd
+      ProjMuVolume_Phantom2_Bone.nrrd
+      ProjMuVolume_Phantom2_Tissue.nrrd
+    """
+    return f"{kind}_{C.SIM_FILE_PID}_{material}.nrrd"
 
 
 def load_material_projs():
-    pid = C.SIM_PHANTOM_ID
     base = C.SIM_PHANTOM_DIR
 
-    LW, _ = read_nrrd_from_dir(base, _fname(pid, "Water"))
-    LI, _ = read_nrrd_from_dir(base, _fname(pid, "Iodine"))
-    LB, _ = read_nrrd_from_dir(base, _fname(pid, "Bone"))
-    LT, _ = read_nrrd_from_dir(base, _fname(pid, "Tissue"))
+    LW, _ = read_nrrd_from_dir(base, _fname_mu("ProjMuVolume", "Water"))
+    LI, _ = read_nrrd_from_dir(base, _fname_mu("ProjMuVolume", "Iodine"))
+    LB, _ = read_nrrd_from_dir(base, _fname_mu("ProjMuVolume", "Bone"))
+    LT, _ = read_nrrd_from_dir(base, _fname_mu("ProjMuVolume", "Tissue"))
     return LW, LI, LB, LT
 
 
 def load_projnoise_by_energy():
     """
     在文件夹里扫描：
-      ProjNoise_{pid}_E0080.nrrd
-      ProjNoise_{pid}_E0100.nrrd
-      ProjNoise_{pid}_E0120.nrrd
+      ProjNoise_Phantom2_E080.nrrd
+      ProjNoise_Phantom2_E0100.nrrd
+      ProjNoise_Phantom2_E0120.nrrd
     """
-    pid = C.SIM_PHANTOM_ID
     base = C.SIM_PHANTOM_DIR
+    pid = C.SIM_FILE_PID
 
     proj = {}
-    pattern = f"ProjNoise_{pid}_E0*.nrrd"
+    pattern = f"ProjNoise_{pid}_E*.nrrd"
     files = sorted(base.glob(pattern))
 
     if not files:
         raise FileNotFoundError(
             f"No files matched {pattern} under {base}. "
-            f"Check SIM_PHANTOM_DIR and SIM_PHANTOM_ID."
+            f"Check SIM_PHANTOM_DIR and SIM_FILE_PID."
         )
 
     for fp in files:
         name = fp.name  # 文件名
-        # 从 "ProjNoise_Phantom2_E0080.nrrd" 提取 80
+        # 从 "ProjNoise_Phantom2_E080.nrrd" 或 "ProjNoise_Phantom2_E0100.nrrd" 提取能量
         try:
-            e_str = name.split("_E0")[-1].split(".")[0]  # "080" or "0800" depending
-            e = int(e_str)  # "0080" -> 80
+            e_str = name.split("_E")[-1].split(".")[0]  # "080" or "0100" or "0120"
+            e = int(e_str)  # int("080")->80, int("0100")->100
         except Exception as ex:
             raise ValueError(f"Cannot parse energy from filename: {name}") from ex
 
@@ -62,17 +82,20 @@ def load_projnoise_by_energy():
 
 
 def main():
-    # 0) 检查路径配置
-    print("SIM_PHANTOM_DIR =", C.SIM_PHANTOM_DIR)
-    print("SIM_PHANTOM_ID  =", C.SIM_PHANTOM_ID)
+    # 0) 输出目录
+    C.OUT_DIR.mkdir(exist_ok=True, parents=True)
 
-    # 1) 读材料投影真值 & 噪声投影
+    # 1) 检查路径配置
+    print("SIM_PHANTOM_DIR =", C.SIM_PHANTOM_DIR)
+    print("SIM_FILE_PID   =", C.SIM_FILE_PID)
+
+    # 2) 读材料投影真值 & 噪声投影
     LW, LI_gt, LB, LT = load_material_projs()
     proj = load_projnoise_by_energy()
     energies = sorted(proj.keys())
     print("Found energies:", energies)
 
-    # 2) 每能量拟合有效系数 muW muI muB muT
+    # 3) 每能量拟合有效系数 muW muI muB muT
     mu = {}
     for e in energies:
         coef = fit_mu_coeffs(LW, LI_gt, LB, LT, proj[e], sample=200000, seed=0)
@@ -81,7 +104,7 @@ def main():
             f"E={e:3d}: muW={coef[0]:.6f}, muI={coef[1]:.6f}, muB={coef[2]:.6f}, muT={coef[3]:.6f}"
         )
 
-    # 3) 能量对分解 + 指标
+    # 4) 能量对分解 + 指标
     rows = []
     for e1, e2 in C.SIM_PAIRS:
         if e1 not in proj or e2 not in proj:
@@ -117,7 +140,7 @@ def main():
     out_csv = C.OUT_DIR / "sim_projection_domain_results.csv"
     save_df(df, out_csv)
 
-    # 4) 画图
+    # 5) 画图
     plot_metric_vs_deltaE(
         df, "iodine_relRMSE_vs_GT",
         C.OUT_DIR / "sim_iodine_relRMSE_vs_deltaE.png",
@@ -135,8 +158,8 @@ def main():
         annotate_col="pair"
     )
 
-    print("Saved plots to outputs/")
     print("\nSaved:", out_csv)
+    print("Saved plots to:", C.OUT_DIR)
     print(df.to_string(index=False))
 
 
